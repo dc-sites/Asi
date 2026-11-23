@@ -71,10 +71,32 @@
   </div>
 
   <script type="module">
-    import { db, WORKER_STREAM_URL } from "./firebase-config.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
     import {
-      collection, getDocs, query, orderBy, limit, startAfter, where
-    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+      getFirestore,
+      collection,
+      getDocs,
+      query,
+      orderBy,
+      limit,
+      startAfter,
+      where
+    } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+    const WORKER_STREAM_URL = "https://YOUR_WORKER_URL"; // Replace with your Cloudflare Worker URL
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAEdEpK8B4WGR0iYZL5GKR20Q5p1MCU2l4",
+      authDomain: "asianhub-9f45c.firebaseapp.com",
+      projectId: "asianhub-9f45c",
+      storageBucket: "asianhub-9f45c.firebasestorage.app",
+      messagingSenderId: "297225882992",
+      appId: "1:297225882992:web:59a3b7212c3ca2cdd1d3b5",
+      measurementId: "G-8RYD4W7YBB"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
 
     // 1. Dark / Light Mode Logic
     const themeToggle = document.getElementById("themeToggle");
@@ -100,76 +122,82 @@
     const seeMoreBtn = document.getElementById("seeMoreBtn");
     const collectionsBar = document.getElementById("collectionsBar");
 
-    // Helper: Build secure stream URL through Cloudflare Worker
-    function getStreamUrl(r2KeyOrUrl) {
-      // If admin pasted a full URL, extract the filename; otherwise use key directly
-      const fileName = r2KeyOrUrl.split("/").pop();
-      return `${WORKER_STREAM_URL}/${encodeURIComponent(fileName)}`;
+    // Helper: Build secure stream URL through Cloudflare Worker using r2Key
+    function getStreamUrl(video) {
+      const rawKey = (video.r2Key || video.videoUrl || "").trim();
+      const fileName = rawKey.split("/").pop().replace(/^\/+/, "");
+      const base = WORKER_STREAM_URL.replace(/\/+$/, "");
+      return `${base}/${encodeURIComponent(fileName)}`;
     }
 
-    // 3. Load Collections into Filter Pills
-    async function loadCollections() {
-      const snap = await getDocs(collection(db, "collections"));
-      snap.forEach((doc) => {
-        const name = doc.data().name;
+    // 3. Build Collection Filter Pills from existing videos' collection values
+    function refreshCollectionPills() {
+      const names = [...new Set(loadedVideos.map(v => v.collection).filter(Boolean))];
+      collectionsBar.innerHTML = `<button class="pill ${activeCollection === "ALL" ? "active" : ""}" data-collection="ALL">All Videos</button>`;
+      names.forEach((name) => {
         const btn = document.createElement("button");
-        btn.className = "pill";
+        btn.className = `pill ${activeCollection === name ? "active" : ""}`;
         btn.dataset.collection = name;
         btn.textContent = name;
         collectionsBar.appendChild(btn);
       });
-
-      collectionsBar.addEventListener("click", (e) => {
-        if (!e.target.classList.contains("pill")) return;
-        document.querySelectorAll(".pill").forEach(p => p.classList.remove("active"));
-        e.target.classList.add("active");
-
-        activeCollection = e.target.dataset.collection;
-        document.getElementById("gridHeading").textContent =
-          activeCollection === "ALL" ? "Latest Releases" : activeCollection;
-
-        resetAndLoadVideos();
-      });
     }
+
+    collectionsBar.addEventListener("click", (e) => {
+      if (!e.target.classList.contains("pill")) return;
+      activeCollection = e.target.dataset.collection;
+      document.getElementById("gridHeading").textContent =
+        activeCollection === "ALL" ? "Latest Releases" : activeCollection;
+      resetAndLoadVideos();
+    });
 
     // 4. Fetch Videos with "See More" Cursor Pagination
     async function fetchVideos(isNextPage = false) {
       seeMoreBtn.textContent = "Loading...";
       seeMoreBtn.disabled = true;
 
-      let constraints = [orderBy("createdAt", "desc"), limit(PAGE_SIZE)];
-      if (activeCollection !== "ALL") {
-        constraints = [
-          where("collection", "==", activeCollection),
-          orderBy("createdAt", "desc"),
-          limit(PAGE_SIZE)
-        ];
-      }
-      if (isNextPage && lastVisibleDoc) {
-        constraints.push(startAfter(lastVisibleDoc));
-      }
-
-      const q = query(collection(db, "videos"), ...constraints);
-      const snapshot = await getDocs(q);
-
-      if (!snapshot.empty) {
-        lastVisibleDoc = snapshot.docs[snapshot.docs.length - 1];
-        snapshot.forEach((doc) => {
-          const data = { id: doc.id, ...doc.data() };
-          loadedVideos.push(data);
-          renderVideoCard(data);
-        });
-
-        // Populate Hero with the very first video
-        if (!isNextPage && loadedVideos.length > 0) {
-          setHero(loadedVideos[0]);
+      try {
+        let constraints = [orderBy("createdAt", "desc"), limit(PAGE_SIZE)];
+        if (activeCollection !== "ALL") {
+          constraints = [
+            where("collection", "==", activeCollection),
+            orderBy("createdAt", "desc"),
+            limit(PAGE_SIZE)
+          ];
         }
-      }
+        if (isNextPage && lastVisibleDoc) {
+          constraints.push(startAfter(lastVisibleDoc));
+        }
 
-      seeMoreBtn.style.display = snapshot.size === PAGE_SIZE ? "inline-block" : "none";
-      seeMoreBtn.textContent = "See More Videos ↓";
-      seeMoreBtn.disabled = false;
-      document.getElementById("videoCount").textContent = `${loadedVideos.length} loaded`;
+        const q = query(collection(db, "videos"), ...constraints);
+        const snapshot = await getDocs(q);
+
+        if (!snapshot.empty) {
+          lastVisibleDoc = snapshot.docs[snapshot.docs.length - 1];
+          snapshot.forEach((doc) => {
+            const data = { id: doc.id, ...doc.data() };
+            loadedVideos.push(data);
+            renderVideoCard(data);
+          });
+
+          refreshCollectionPills();
+
+          if (!isNextPage && loadedVideos.length > 0) {
+            setHero(loadedVideos[0]);
+          }
+        } else if (!isNextPage) {
+          videoGrid.innerHTML = `<p style="color: var(--text-secondary);">No videos published yet.</p>`;
+        }
+
+        seeMoreBtn.style.display = snapshot.size === PAGE_SIZE ? "inline-block" : "none";
+      } catch (err) {
+        console.error("Failed to load videos:", err);
+        videoGrid.innerHTML = `<p style="color: var(--text-secondary);">Could not load videos: ${err.message}</p>`;
+      } finally {
+        seeMoreBtn.textContent = "See More Videos ↓";
+        seeMoreBtn.disabled = false;
+        document.getElementById("videoCount").textContent = `${loadedVideos.length} loaded`;
+      }
     }
 
     function resetAndLoadVideos() {
@@ -181,15 +209,15 @@
 
     function setHero(video) {
       document.getElementById("heroCollection").textContent = video.collection || "Featured";
-      document.getElementById("heroTitle").textContent = video.title;
-      document.getElementById("heroDesc").textContent = video.description;
+      document.getElementById("heroTitle").textContent = video.title || "Untitled";
+      document.getElementById("heroDesc").textContent = video.description || "";
       const playBtn = document.getElementById("heroPlayBtn");
       playBtn.style.display = "inline-block";
       playBtn.onclick = () => openPlayer(video);
     }
 
     function renderVideoCard(video) {
-      const streamUrl = getStreamUrl(video.videoUrl);
+      const streamUrl = getStreamUrl(video);
       const card = document.createElement("article");
       card.className = "video-card";
       card.innerHTML = `
@@ -201,8 +229,8 @@
         </div>
         <div class="card-body">
           <span class="card-tag">${video.collection || "General"}</span>
-          <h3 class="card-title">${video.title}</h3>
-          <p class="card-desc">${video.description}</p>
+          <h3 class="card-title">${video.title || "Untitled"}</h3>
+          <p class="card-desc">${video.description || ""}</p>
         </div>
       `;
       card.addEventListener("click", () => openPlayer(video));
@@ -214,12 +242,12 @@
     const theaterVideo = document.getElementById("theaterVideo");
 
     function openPlayer(video) {
-      theaterVideo.src = getStreamUrl(video.videoUrl);
-      document.getElementById("modalCollection").textContent = video.collection;
-      document.getElementById("modalTitle").textContent = video.title;
-      document.getElementById("modalDesc").textContent = video.description;
+      theaterVideo.src = getStreamUrl(video);
+      document.getElementById("modalCollection").textContent = video.collection || "General";
+      document.getElementById("modalTitle").textContent = video.title || "Untitled";
+      document.getElementById("modalDesc").textContent = video.description || "";
       modal.classList.add("open");
-      theaterVideo.play();
+      theaterVideo.play().catch(() => {});
     }
 
     function closePlayer() {
@@ -239,14 +267,16 @@
       const term = e.target.value.toLowerCase();
       videoGrid.innerHTML = "";
       loadedVideos
-        .filter(v => v.title.toLowerCase().includes(term) || v.description.toLowerCase().includes(term))
+        .filter(v =>
+          (v.title || "").toLowerCase().includes(term) ||
+          (v.description || "").toLowerCase().includes(term)
+        )
         .forEach(renderVideoCard);
     });
 
     seeMoreBtn.addEventListener("click", () => fetchVideos(true));
 
     // Initialize
-    loadCollections();
     fetchVideos(false);
   </script>
 </body>
