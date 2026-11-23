@@ -47,15 +47,13 @@
     </div>
   </main>
 
-  <!-- Anti-Download Theater Modal -->
+  <!-- Theater Modal -->
   <div class="modal" id="playerModal">
     <div class="modal-content">
-      <div class="player-box" oncontextmenu="return false;">
+      <div class="player-box">
         <video
           id="theaterVideo"
           controls
-          controlsList="nodownload noplaybackrate"
-          disablePictureInPicture
           playsinline
         ></video>
       </div>
@@ -82,8 +80,6 @@
       startAfter,
       where
     } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-
-    const WORKER_STREAM_URL = "https://YOUR_WORKER_URL"; // Replace with your Cloudflare Worker URL
 
     const firebaseConfig = {
       apiKey: "AIzaSyAEdEpK8B4WGR0iYZL5GKR20Q5p1MCU2l4",
@@ -122,12 +118,8 @@
     const seeMoreBtn = document.getElementById("seeMoreBtn");
     const collectionsBar = document.getElementById("collectionsBar");
 
-    // Helper: Build secure stream URL through Cloudflare Worker using r2Key
-    function getStreamUrl(video) {
-      const rawKey = (video.r2Key || video.videoUrl || "").trim();
-      const fileName = rawKey.split("/").pop().replace(/^\/+/, "");
-      const base = WORKER_STREAM_URL.replace(/\/+$/, "");
-      return `${base}/${encodeURIComponent(fileName)}`;
+    function getVideoSource(video) {
+      return (video.videoUrl || video.r2Key || "").trim();
     }
 
     // 3. Build Collection Filter Pills from existing videos' collection values
@@ -217,20 +209,23 @@
     }
 
     function renderVideoCard(video) {
-      const streamUrl = getStreamUrl(video);
+      const src = getVideoSource(video);
       const card = document.createElement("article");
       card.className = "video-card";
       card.innerHTML = `
         <div class="thumb-wrapper">
-          <video src="${streamUrl}#t=1.5" preload="metadata" muted></video>
+          ${video.posterUrl
+            ? `<img src="${escapeHtml(video.posterUrl)}" alt="${escapeHtml(video.title || "")}" style="width:100%; height:100%; object-fit:cover;" />`
+            : `<video src="${escapeHtml(src)}#t=1.5" preload="metadata" muted></video>`
+          }
           <div class="play-overlay">
             <div class="play-circle">▶</div>
           </div>
         </div>
         <div class="card-body">
-          <span class="card-tag">${video.collection || "General"}</span>
-          <h3 class="card-title">${video.title || "Untitled"}</h3>
-          <p class="card-desc">${video.description || ""}</p>
+          <span class="card-tag">${escapeHtml(video.collection || "General")}</span>
+          <h3 class="card-title">${escapeHtml(video.title || "Untitled")}</h3>
+          <p class="card-desc">${escapeHtml(video.description || "")}</p>
         </div>
       `;
       card.addEventListener("click", () => openPlayer(video));
@@ -242,12 +237,15 @@
     const theaterVideo = document.getElementById("theaterVideo");
 
     function openPlayer(video) {
-      theaterVideo.src = getStreamUrl(video);
+      const src = getVideoSource(video);
+      theaterVideo.src = src;
       document.getElementById("modalCollection").textContent = video.collection || "General";
       document.getElementById("modalTitle").textContent = video.title || "Untitled";
       document.getElementById("modalDesc").textContent = video.description || "";
       modal.classList.add("open");
-      theaterVideo.play().catch(() => {});
+      theaterVideo.play().catch((err) => {
+        console.error("Playback error:", err);
+      });
     }
 
     function closePlayer() {
@@ -275,6 +273,14 @@
     });
 
     seeMoreBtn.addEventListener("click", () => fetchVideos(true));
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
 
     // Initialize
     fetchVideos(false);
